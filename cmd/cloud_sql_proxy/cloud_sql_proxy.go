@@ -81,11 +81,11 @@ can be removed automatically by this program.`)
 	token     = flag.String("token", "", "When set, the proxy uses this Bearer token for authorization.")
 	tokenFile = flag.String("credential_file", "", `If provided, this json file will be used to retrieve Service Account credentials.
 You may set the GOOGLE_APPLICATION_CREDENTIALS environment variable for the same effect.`)
+	ipAddressType = flag.String("ip_address_type", "Primary", "Default to be primary. Options: Primary, private")
 )
 
 const (
 	minimumRefreshCfgThrottle = time.Second
-
 	host = "https://www.googleapis.com/sql/v1beta4/"
 	port = 3307
 )
@@ -421,7 +421,6 @@ func main() {
 		log.Fatal(err)
 	}
 	instList = append(instList, ins...)
-
 	cfgs, err := CreateInstanceConfigs(*dir, *useFuse, instList, *instanceSrc, client)
 	if err != nil {
 		log.Fatal(err)
