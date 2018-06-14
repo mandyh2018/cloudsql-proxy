@@ -32,6 +32,7 @@ import (
 	"github.com/GoogleCloudPlatform/cloudsql-proxy/proxy/util"
 	"google.golang.org/api/googleapi"
 	sqladmin "google.golang.org/api/sqladmin/v1beta4"
+	"strings"
 )
 
 const defaultUserAgent = "custom cloud_sql_proxy version >= 1.10"
@@ -64,6 +65,9 @@ type RemoteOpts struct {
 	// A string for the RemoteCertSource to identify itself when contacting the
 	// sqladmin API.
 	UserAgent string
+
+	// IP address type options
+	IPAddrTypeOpts []string
 }
 
 // NewCertSourceOpts returns a CertSource configured with the provided Opts.
@@ -88,7 +92,15 @@ func NewCertSourceOpts(c *http.Client, opts RemoteOpts) *RemoteCertSource {
 		ua = defaultUserAgent
 	}
 	serv.UserAgent = ua
-	return &RemoteCertSource{pkey, serv, !opts.IgnoreRegion}
+
+	// Add "PUBLIC" as an alias for "PRIMARY"
+	for index,ipAddressType := range opts.IPAddrTypeOpts {
+		if strings.ToUpper(ipAddressType) == "PUBLIC" {
+			opts.IPAddrTypeOpts[index] = "PRIMARY"
+		}
+	}
+
+	return &RemoteCertSource{pkey, serv, !opts.IgnoreRegion, opts.IPAddrTypeOpts}
 }
 
 // RemoteCertSource implements a CertSource, using Cloud SQL APIs to
@@ -104,6 +116,8 @@ type RemoteCertSource struct {
 	// treated as an error. This is to provide the same functionality that will
 	// occur when API calls require the region.
 	checkRegion bool
+	// a list of ip address types that users select
+	IPAddrTypes []string
 }
 
 // Constants for backoffAPIRetry. These cause the retry logic to scale the
@@ -215,9 +229,44 @@ func (s *RemoteCertSource) Remote(instance string) (cert *x509.Certificate, addr
 		logging.Errorf("%v", err)
 		logging.Errorf("WARNING: specifying the correct region in an instance string will become required in a future version!")
 	}
-	if len(data.IpAddresses) == 0 || data.IpAddresses[0].IpAddress == "" {
+
+	if len(data.IpAddresses) == 0 {
 		return nil, "", "", fmt.Errorf("no IP address found for %v", instance)
 	}
+
+	// Find the first matching IP address type between user input types and the types that the instance has
+	IPAddrInUse := ""
+	isFound := false
+	for _, eachIPAddrTypeByUser := range s.IPAddrTypes {
+		for _, eachIPAddrTypeOfInstance := range data.IpAddresses {
+			if strings.ToUpper(eachIPAddrTypeOfInstance.Type) == strings.ToUpper(eachIPAddrTypeByUser) {
+				IPAddrInUse = eachIPAddrTypeOfInstance.IpAddress
+				isFound = true
+				break
+			}
+		}
+
+		if isFound {
+			break
+		}
+	}
+
+	if IPAddrInUse == "" {
+		IPAddrTypesOfInstance := ""
+		for _, eachIPAddrTypeOfInstance := range data.IpAddresses {
+			IPAddrTypesOfInstance += "(TYPE: " + eachIPAddrTypeOfInstance.Type + " IP: " + eachIPAddrTypeOfInstance.IpAddress + ") "
+		}
+
+		IPAddrTypeOfUser := ""
+		for _, eachIPAddrOpt := range s.IPAddrTypes {
+			IPAddrTypeOfUser += eachIPAddrOpt + ","
+		}
+		IPAddrTypeOfUser = strings.TrimSuffix(IPAddrTypeOfUser, ",")
+
+		return nil, "", "", fmt.Errorf("User input IP address type (%v) does not match the instance %v, the instance's IP addresses are {%v}", IPAddrTypeOfUser, instance, IPAddrTypesOfInstance)
+	}
+
 	c, err := parseCert(data.ServerCaCert.Cert)
-	return c, data.IpAddresses[0].IpAddress, p + ":" + n, err
+
+	return c, IPAddrInUse, p + ":" + n, err
 }
